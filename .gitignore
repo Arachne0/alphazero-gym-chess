@@ -11,5 +11,6 @@ fiar_env_copy.py
 *.zip
 *.png
 *.c
+*.dylib
 .DS_Store
 policy_value/.DS_Store
