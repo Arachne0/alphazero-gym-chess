@@ -1,0 +1,15 @@
+.vscode/
+__pycache__/
+.idea/
+logs/
+wandb/
+prev_codes/mcts_copy.py
+fiar_env_copy.py
+*.log
+*.out
+*.model
+*.zip
+*.png
+*.c
+.DS_Store
+policy_value/.DS_Store
