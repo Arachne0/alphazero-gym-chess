@@ -128,13 +128,12 @@ class MCTS(object):
         self._c_puct = c_puct
         self._n_playout = n_playout
 
-    def _playout(self, env, state):
+    def _playout(self, env):
         """Run a single playout from the root to the leaf, getting a value at
         the leaf and propagating it back through its parents.
         State is modified in-place, so a copy must be provided.
         """
         node = self._root
-        # observation, reward, termination, truncation, info = env.last()
 
         while(1):
             if node.is_leaf():
@@ -143,7 +142,7 @@ class MCTS(object):
             action, node = node.select(self._c_puct)
             env.step(action)
 
-        available, action_probs, leaf_value = self._policy(env, state)
+        available, action_probs, leaf_value = self._policy(env)
         action_probs = zip(available, action_probs[available])
         # observation, reward, termination, truncation, info = env.last()
 
@@ -169,15 +168,8 @@ class MCTS(object):
         temp: temperature parameter in (0, 1] controls the level of exploration
         """
         for n in range(self._n_playout):
-            # env_new = chess_v6.env()
-            # env_new.reset()
-            # for move in move_list:
-            #     env.step(move)
-            # env_copy.agent_selection = env.agent_selection
-            state_copy = copy.deepcopy(state)
             env_copy = copy.deepcopy(env)
-
-            self._playout(env_copy, state_copy)
+            self._playout(env_copy)
 
         # calc the move probabilities based on visit counts at the root node
         act_visits = [(act, node._n_visits)
@@ -216,21 +208,9 @@ class MCTSPlayer(object):
         self.mcts.update_with_move(-1)
 
     def get_action(self, env, obs, temp=1e-3, return_prob=0):
-        # legal_moves = []
-        # uci_moves = list(env.env.env.env.board.legal_moves)
-        # uci_moves = [move.uci() for move in uci_moves]
-        # if env.env.env.env.board.turn == True:
-        #     for uci_move in uci_moves:
-        #         legal_moves.append(move_map_white(uci_move))
-        # else:
-        #     for uci_move in uci_moves:
-        #         move = black_move(uci_move)
-        #         legal_moves.append(move_map_black(move))
-
         move_probs = np.zeros(obs.shape[0] * obs.shape[1] * 73)
 
         if env.terminal is not True:
-            # acts, probs = self.mcts.get_move_probs(move_list, temp)
             acts, probs = self.mcts.get_move_probs(env, obs, temp)
             move_probs[list(acts)] = probs
             if self._is_selfplay:

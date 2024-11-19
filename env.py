@@ -8,6 +8,7 @@ from PIL import Image
 import gym
 import copy
 from gym.spaces import *
+from network import index_to_uci_move
 
 import numpy as np
 
@@ -16,15 +17,28 @@ BLACK = 0
 
 
 def __deepcopy__(self, memo):
-  new_instance = self.__class__.__new__(self.__class__)
-  memo[id(self)] = new_instance
+    new_instance = self.__class__.__new__(self.__class__)
+    memo[id(self)] = new_instance
 
-  new_instance.board = np.copy(self.board)
-  new_instance.state = np.copy(self.state)
-  new_instance.action_space = self.action_space
+    new_instance.board = np.copy(self.board)
+    new_instance.state = np.copy(self.state)
 
 
-  return new_instance
+
+    new_instance.Colour_plane = copy.deepcopy(self.Colour_plane, memo)
+    new_instance.No_progress_count_plane = copy.deepcopy(self.No_progress_count_plane, memo)
+
+    new_instance.P1_piece_planes = copy.deepcopy(self.P1_piece_planes, memo)
+    new_instance.P1_castling_planes = copy.deepcopy(self.P1_castling_planes, memo)
+    new_instance.P2_piece_planes = copy.deepcopy(self.P2_piece_planes, memo)
+    new_instance.P2_castling_planes = copy.deepcopy(self.P2_castling_planes, memo)
+    new_instance.Repetitions_planes = copy.deepcopy(self.Repitations_planes, memo)
+    new_instance.Total_move_count_plane = copy.deepcopy(self.Total_move_count_plane, memo)
+    new_instance.binary_feature_planes = copy.deepcopy(self.binary_feature_planes, memo)
+
+    new_instance.action_space = self.action_space
+
+    return new_instance
 
 
 def is_repetition(self, count: int = 3) -> bool:
@@ -78,19 +92,22 @@ def is_repetition(self, count: int = 3) -> bool:
 
 chess.Board.is_repetition = is_repetition
 
+
 class Chess(gym.Env):
   """AlphaGo Chess Environment"""
   metadata = {'render.modes': ['rgb_array', 'human']}
 
   def __init__(self):
     self.board = None
+    self.turn = WHITE
+    self.terminal = False
+    self.reward = None
 
     self.T = 8
     self.M = 3
     self.L = 6
 
     self.size = (8, 8)
-
     # self.viewer = None
 
     # self.knight_move2plane[dCol][dRow]
@@ -115,6 +132,24 @@ class Chess(gym.Env):
     self.action_space = Dict({"Queen moves": Tuple([MultiBinary((8, 8)) for squares in range(7) for direction in range(8)]),
                               "Knight moves": Tuple([MultiBinary((8, 8)) for move in range(8)]),
                               "Underpromotions": Tuple(MultiBinary((8, 8)) for move in range(9))})
+
+  def __deepcopy__(self, memo):
+    # 새로운 Chess 객체 생성
+    new_obj = Chess()
+
+    new_obj.board = copy.deepcopy(self.board, memo)  # board 복사
+    new_obj.T = self.T
+    new_obj.M = self.M
+    new_obj.L = self.L
+
+    new_obj.size = self.size
+
+    new_obj.knight_move2plane = copy.deepcopy(self.knight_move2plane, memo)
+    new_obj.observation_space = copy.deepcopy(self.observation_space, memo)
+    new_obj.state_history = copy.deepcopy(self.state_history, memo)
+    # new_obj.action_space = copy.deepcopy(self.action_space, memo)
+
+    return new_obj
 
   def repetitions(self):
     count = 0
@@ -222,107 +257,108 @@ class Chess(gym.Env):
 
     return mask
 
-  def step(self, p):
-    mask = self.legal_move_mask()
-    p = p * mask
-    pMin, pMax = p.min(), p.max()
-    p = (p - pMin) / (pMax - pMin)
-    action = np.unravel_index(p.argmax(), p.shape)
+  def step(self, index):
+    # mask = self.legal_move_mask()
+    # p = p * mask
+    # pMin, pMax = p.min(), p.max()
+    # p = (p - pMin) / (pMax - pMin)
+    # action = np.unravel_index(p.argmax(), p.shape)
+    #
+    # fromRow, fromCol, plane = action
+    #
+    # if plane < 56: # Queen move
+    #   squares, direction = divmod(plane, 8)
+    #   squares += 1
+    #
+    #   """
+    #   7 0 1
+    #   6   2
+    #   5 4 3
+    #   """
+    #   if direction == 0:
+    #     toRow = fromRow - squares
+    #     toCol = fromCol
+    #   elif direction == 1:
+    #     toRow = fromRow - squares
+    #     toCol = fromCol + squares
+    #   elif direction == 2:
+    #     toRow = fromRow
+    #     toCol = fromCol + squares
+    #   elif direction == 3:
+    #     toRow = fromRow + squares
+    #     toCol = fromCol + squares
+    #   elif direction == 4:
+    #     toRow = fromRow + squares
+    #     toCol = fromCol
+    #   elif direction == 5:
+    #     toRow = fromRow + squares
+    #     toCol = fromCol - squares
+    #   elif direction == 6:
+    #     toRow = fromRow
+    #     toCol = fromCol - squares
+    #   else: # direction == 7
+    #     toRow = fromRow - squares
+    #     toCol = fromCol - squares
+    #
+    #   fromSquare = (7 - fromRow) * 8 + fromCol
+    #   toSquare = (7 - toRow) * 8 + toCol
+    #   move = chess.Move(fromSquare, toSquare)
+    # elif plane < 64: # Knight move
+    #   """
+    #   [ ][5][ ][3][ ]
+    #   [7][ ][ ][ ][1]
+    #   [ ][ ][K][ ][ ]
+    #   [6][ ][ ][ ][0]
+    #   [ ][4][ ][2][ ]
+    #   """
+    #   if plane == 56:
+    #     toRow = fromRow + 1
+    #     toCol = fromCol + 2
+    #   elif plane == 57:
+    #     toRow = fromRow - 1
+    #     toCol = fromCol + 2
+    #   elif plane == 58:
+    #     toRow = fromRow + 2
+    #     toCol = fromCol + 1
+    #   elif plane == 59:
+    #     toRow = fromRow - 2
+    #     toCol = fromCol + 1
+    #   elif plane == 60:
+    #     toRow = fromRow + 2
+    #     toCol = fromCol - 1
+    #   elif plane == 61:
+    #     toRow = fromRow - 2
+    #     toCol = fromCol - 1
+    #   elif plane == 62:
+    #     toRow = fromRow + 1
+    #     toCol = fromCol - 2
+    #   else: # plane == 63
+    #     toRow = fromRow - 1
+    #     toCol = fromCol - 2
+    #
+    #   fromSquare = (7 - fromRow) * 8 + fromCol
+    #   toSquare = (7 - toRow) * 8 + toCol
+    #   move = chess.Move(fromSquare, toSquare)
+    # else: # Underpromotions
+    #   toRow = fromRow - self.board.turn
+    #
+    #   if plane <= 66:
+    #     toCol = fromCol
+    #     promotion = plane - 62
+    #   elif plane <= 69:
+    #     diagonal = 0
+    #     promotion = plane - 65
+    #     toCol = fromCol - self.board.turn
+    #   else: # plane <= 72
+    #     diagonal = 1
+    #     promotion = plane - 68
+    #     toCol = fromCol + self.board.turn
+    #
+    #   fromSquare = (7 - fromRow) * 8 + fromCol
+    #   toSquare = (7 - toRow) * 8 + toCol
+    #   move = chess.Move(fromSquare, toSquare, promotion=promotion)
 
-    fromRow, fromCol, plane = action
-
-    if plane < 56: # Queen move
-      squares, direction = divmod(plane, 8)
-      squares += 1
-
-      """
-      7 0 1
-      6   2
-      5 4 3
-      """
-      if direction == 0:
-        toRow = fromRow - squares
-        toCol = fromCol
-      elif direction == 1:
-        toRow = fromRow - squares
-        toCol = fromCol + squares
-      elif direction == 2:
-        toRow = fromRow
-        toCol = fromCol + squares
-      elif direction == 3:
-        toRow = fromRow + squares
-        toCol = fromCol + squares
-      elif direction == 4:
-        toRow = fromRow + squares
-        toCol = fromCol 
-      elif direction == 5:
-        toRow = fromRow + squares
-        toCol = fromCol - squares
-      elif direction == 6:
-        toRow = fromRow
-        toCol = fromCol - squares
-      else: # direction == 7
-        toRow = fromRow - squares
-        toCol = fromCol - squares
-
-      fromSquare = (7 - fromRow) * 8 + fromCol
-      toSquare = (7 - toRow) * 8 + toCol
-      move = chess.Move(fromSquare, toSquare)
-    elif plane < 64: # Knight move
-      """
-      [ ][5][ ][3][ ]
-      [7][ ][ ][ ][1]
-      [ ][ ][K][ ][ ]
-      [6][ ][ ][ ][0]
-      [ ][4][ ][2][ ]
-      """
-      if plane == 56:
-        toRow = fromRow + 1
-        toCol = fromCol + 2
-      elif plane == 57:
-        toRow = fromRow - 1
-        toCol = fromCol + 2
-      elif plane == 58:
-        toRow = fromRow + 2
-        toCol = fromCol + 1
-      elif plane == 59:
-        toRow = fromRow - 2
-        toCol = fromCol + 1
-      elif plane == 60:
-        toRow = fromRow + 2
-        toCol = fromCol - 1
-      elif plane == 61:
-        toRow = fromRow - 2
-        toCol = fromCol - 1
-      elif plane == 62:
-        toRow = fromRow + 1
-        toCol = fromCol - 2
-      else: # plane == 63
-        toRow = fromRow - 1
-        toCol = fromCol - 2
-
-      fromSquare = (7 - fromRow) * 8 + fromCol
-      toSquare = (7 - toRow) * 8 + toCol
-      move = chess.Move(fromSquare, toSquare)
-    else: # Underpromotions
-      toRow = fromRow - self.board.turn
-
-      if plane <= 66:
-        toCol = fromCol
-        promotion = plane - 62
-      elif plane <= 69:
-        diagonal = 0
-        promotion = plane - 65
-        toCol = fromCol - self.board.turn
-      else: # plane <= 72
-        diagonal = 1
-        promotion = plane - 68
-        toCol = fromCol + self.board.turn
-
-      fromSquare = (7 - fromRow) * 8 + fromCol
-      toSquare = (7 - toRow) * 8 + toCol
-      move = chess.Move(fromSquare, toSquare, promotion=promotion)
-
+    move, from_square, to_square = index_to_uci_move(index)
     self.board.push(move)
 
     # self.board = self.board.mirror()

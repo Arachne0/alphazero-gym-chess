@@ -112,16 +112,12 @@ def self_play(env, mcts_player, temp, game_iter=0, self_play_i=0):
     player_0 = 1
     player_1 = 1 - player_0
     states, mcts_probs, current_player = [], [], []
-    move_list = []
 
     while True:
-        # current_state = torch.tensor(state.copy(), dtype=torch.float32)
-        # move, move_probs = mcts_player.get_action(env, state, move_list, temp, return_prob=1)
+        current_state = torch.tensor(env.observe().copy(), dtype=torch.float32)
         move, move_probs = mcts_player.get_action(env, state, temp, return_prob=1)
 
-        # move_list.append(move)
-        # observation_ = torch.permute(state, (2, 0, 1))  # (8, 8, 119) -> (119, 8, 8)
-        states.append(state)
+        states.append(current_state)
         mcts_probs.append(move_probs)
         current_player.append(player_0)
 
@@ -129,10 +125,8 @@ def self_play(env, mcts_player, temp, game_iter=0, self_play_i=0):
 
         player_0 = 1 - player_0
         player_1 = 1 - player_0
-        # observation, reward, termination, truncation, info = env.last()
 
         if env.terminal is True:
-            # reward_ = env.env.env.env.rewards['player_0'
             # recode time
             iteration_time = time.time() - start_time
             formatted_time = time.strftime("%H:%M:%S", time.gmtime(iteration_time))
@@ -232,36 +226,30 @@ def start_play(env, player1, player2):
     start_time = time.time()
 
     while True:
-        observation, reward, termination, truncation, info = env.last()
-        current_state = torch.tensor(observation['observation'].copy(), dtype=torch.float32)
+        current_state = torch.tensor(env.observe().copy(), dtype=torch.float32)
 
         # synchronize the MCTS tree with the current state of the game
-        move = player_in_turn.get_action(env, current_state, move_lists, temp=1e-3, return_prob=0)
-        move_lists.append(move)
-
+        move = player_in_turn.get_action(env, current_state, temp=1e-3, return_prob=0)
         env.step(move)
-        observation, reward, termination, truncation, info = env.last()
 
-        if not termination or truncation:
+        if not env.terminal:
             current_player = 1 - current_player
             player_in_turn = players[current_player]
 
         else:
-            reward = env.env.env.env.rewards['player_0']
             iteration_time_ = time.time() - start_time
             formatted_time = time.strftime("%H:%M:%S", time.gmtime(iteration_time_))
             print(formatted_time)
             wandb.log({"eval/game_len": len(move_lists),
-                       "eval/reward": reward,
+                       "eval/reward": env.reward,
                        "eval/iteration_time": float(iteration_time_)
                        })
-            return reward, len(move_lists)
+            return env.reward, len(move_lists)
 
 
 if __name__ == '__main__':
     # wandb intialize
-    wandb.init(mode="online",
-               entity="hails",
+    wandb.init(entity="hails",
                project="gym_chess",
                name="gym-Chess" + "-MCTS" + str(n_playout),
                config=args.__dict__
@@ -275,8 +263,6 @@ if __name__ == '__main__':
         device = torch.device("cuda")
     elif torch.backends.mps.is_available():  # Mac OS
         device = torch.device("mps")
-    else:  # CPU
-        device = torch.device("cpu")
 
     if init_model:
         policy_value_net = PolicyValueNet(height, width, model_file=init_model)

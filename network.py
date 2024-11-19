@@ -17,34 +17,133 @@ def set_learning_rate(optimizer, lr):
         param_group['lr'] = lr
 
 
-def label_moves(df):
-    df['player'] = [(8 if i % 2 == 0 else 9) for i in range(len(df))]
-    return df
+def compute_masked_act_probs(log_act_probs, state_batch):
+    act_probs = torch.exp(log_act_probs).cpu().numpy()
+    available_mask = (state_batch[:, 3] == 0).cpu().float().numpy()
+    available_mask = available_mask.reshape(64, 36)
+    masked_act_probs = act_probs * available_mask
+
+    if available_mask.sum(axis=1).all() > 0:
+        act_probs = masked_act_probs / masked_act_probs.sum(axis=1, keepdims=True)
+    else:
+        act_probs = masked_act_probs / (masked_act_probs.sum() + 1)
+
+    return act_probs
 
 
-def move_map_black(move):
-    TOTAL = 73
-    source = move.from_square
-    coord = ut.square_to_coord(source)
-    panel = ut.get_move_plane(move)
-    cur_action = (coord[0] * 8 + coord[1]) * TOTAL + panel
-    return cur_action
+def uci_move_to_index(move):
+    from_square = move.from_square
+    to_square = move.to_square
+
+    move_index = 64 * from_square + to_square
+
+    return move_index
 
 
-def move_map_white(uci_move):
-    TOTAL = 73
-    move = chess.Move.from_uci(uci_move)
-    source = move.from_square
-    coord = ut.square_to_coord(source)
-    panel = ut.get_move_plane(move)
-    cur_action = (coord[0] * 8 + coord[1]) * TOTAL + panel
-    return cur_action
+def index_to_uci_move(index):
+    from_square = index // 64
+    to_square = index % 64
+    move = chess.Move(from_square, to_square)
+
+    return move, from_square, to_square
 
 
-def black_move(uci_move):
-    move = chess.Move.from_uci(uci_move)
-    mir = ut.mirror_move(move)
-    return mir
+def sensible_moves(env, legal_move):
+    fromRow, fromCol, plane = legal_move
+
+    if plane < 56:  # Queen move
+        squares, direction = divmod(plane, 8)
+        squares += 1
+
+        """
+        7 0 1
+        6   2
+        5 4 3
+        """
+        if direction == 0:
+            toRow = fromRow - squares
+            toCol = fromCol
+        elif direction == 1:
+            toRow = fromRow - squares
+            toCol = fromCol + squares
+        elif direction == 2:
+            toRow = fromRow
+            toCol = fromCol + squares
+        elif direction == 3:
+            toRow = fromRow + squares
+            toCol = fromCol + squares
+        elif direction == 4:
+            toRow = fromRow + squares
+            toCol = fromCol
+        elif direction == 5:
+            toRow = fromRow + squares
+            toCol = fromCol - squares
+        elif direction == 6:
+            toRow = fromRow
+            toCol = fromCol - squares
+        else:  # direction == 7
+            toRow = fromRow - squares
+            toCol = fromCol - squares
+
+        fromSquare = (7 - fromRow) * 8 + fromCol
+        toSquare = (7 - toRow) * 8 + toCol
+        move = chess.Move(fromSquare, toSquare)
+    elif plane < 64:  # Knight move
+        """
+        [ ][5][ ][3][ ]
+        [7][ ][ ][ ][1]
+        [ ][ ][K][ ][ ]
+        [6][ ][ ][ ][0]
+        [ ][4][ ][2][ ]
+        """
+        if plane == 56:
+            toRow = fromRow + 1
+            toCol = fromCol + 2
+        elif plane == 57:
+            toRow = fromRow - 1
+            toCol = fromCol + 2
+        elif plane == 58:
+            toRow = fromRow + 2
+            toCol = fromCol + 1
+        elif plane == 59:
+            toRow = fromRow - 2
+            toCol = fromCol + 1
+        elif plane == 60:
+            toRow = fromRow + 2
+            toCol = fromCol - 1
+        elif plane == 61:
+            toRow = fromRow - 2
+            toCol = fromCol - 1
+        elif plane == 62:
+            toRow = fromRow + 1
+            toCol = fromCol - 2
+        else:  # plane == 63
+            toRow = fromRow - 1
+            toCol = fromCol - 2
+
+        fromSquare = (7 - fromRow) * 8 + fromCol
+        toSquare = (7 - toRow) * 8 + toCol
+        move = chess.Move(fromSquare, toSquare)
+    else:  # Underpromotions
+        toRow = fromRow - env.board.turn
+
+        if plane <= 66:
+            toCol = fromCol
+            promotion = plane - 62
+        elif plane <= 69:
+            diagonal = 0
+            promotion = plane - 65
+            toCol = fromCol - env.board.turn
+        else:  # plane <= 72
+            diagonal = 1
+            promotion = plane - 68
+            toCol = fromCol + env.board.turn
+
+        fromSquare = (7 - fromRow) * 8 + fromCol
+        toSquare = (7 - toRow) * 8 + toCol
+        move = chess.Move(fromSquare, toSquare, promotion=promotion)
+
+    return move
 
 
 class Net(nn.Module):
@@ -55,7 +154,7 @@ class Net(nn.Module):
         self.board_width = board_width
         self.board_height = board_height
         # common layers
-        self.conv1 = nn.Conv2d(111, 32, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(119, 32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
         # action policy layers
@@ -115,28 +214,29 @@ class PolicyValueNet():
         state_batch = torch.tensor(state_batch, dtype=torch.float32, device=self.device)
         with torch.no_grad():
             log_act_probs, value = self.policy_value_net(state_batch)
-            act_probs = torch.exp(log_act_probs).cpu().numpy()
+            act_probs = compute_masked_act_probs(log_act_probs, state_batch)
 
         return act_probs, value
 
-    def policy_value_fn(self, env, state):
+    def policy_value_fn(self, env):
         """
         input: board
         output: a list of (action, probability) tuples for each available
         action and the score of the board state
         """
-        available = []
-        # uci_moves = list(env.env.env.env.board.legal_moves)
-        # uci_moves = [move.uci() for move in uci_moves]
-        if env.turn is True: # TODO 여기에서도 수정되어어야 하는데 어떻게 가능한 action 을 뽑아낼지
-            for uci_move in uci_moves:
-                available.append(move_map_white(uci_move))
-        else:
-            for uci_move in uci_moves:
-                move = black_move(uci_move)
-                available.append(move_map_black(move))
+        available = [] # TODO 밑의 부분 좀 보기 싫어서 함수로 만들어 버리고 싶긴함
+        mask = env.legal_move_mask()
+        indices = np.where(mask == 1.0)
+        legal_move = list(zip(indices[0], indices[1], indices[2]))
 
-        current_state = torch.tensor(state.copy(), dtype=torch.float32)
+        # actions = [sensible_moves(env, move) for move in legal_move]
+        # available.append(actions)
+
+        for move in legal_move:
+            move_ = sensible_moves(env, move)
+            available.append(uci_move_to_index(move_))
+
+        current_state = torch.tensor(env.observe().copy(), dtype=torch.float32)
         current_state = current_state.permute(2, 0, 1).unsqueeze(0).to(self.device)  # (8, 8, 111) -> (1, 111, 8, 8)
 
         with torch.no_grad():
@@ -144,6 +244,7 @@ class PolicyValueNet():
             act_probs = torch.exp(log_act_probs).cpu().numpy().flatten()
             masked_act_probs = np.zeros_like(act_probs)
             masked_act_probs[available] = act_probs[available]
+
             if masked_act_probs.sum() > 0:  # if have not available action
                 masked_act_probs /= masked_act_probs.sum()
             else:
@@ -163,6 +264,7 @@ class PolicyValueNet():
         winner_batch = torch.tensor(winner_batch_np, dtype=torch.float32, device=self.device)
 
         log_act_probs, value = self.policy_value_net(state_batch)
+
         # define the loss = (z - v)^2 - pi^T * log(p) + c||theta||^2
         # Note: the L2 penalty is incorporated in optimizer
 
