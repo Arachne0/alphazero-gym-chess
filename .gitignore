@@ -3,8 +3,14 @@ __pycache__/
 .idea/
 logs/
 wandb/
+Training/
+Eval/
+
 prev_codes/mcts_copy.py
 fiar_env_copy.py
+mcts_copy.py
+network_copy.py
+
 *.log
 *.out
 *.model
