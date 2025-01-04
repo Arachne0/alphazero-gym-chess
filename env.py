@@ -190,7 +190,10 @@ class Chess(gym.Env):
     
     self.state_history = self.state_history[:, :, 14:-7]
     self.state_history = np.concatenate((self.state_history, self.binary_feature_planes, self.constant_value_planes), axis = -1)
-    return self.state_history
+
+    self.legal_moves = self.legal_move_mask().flatten()
+
+    return self.state_history.transpose(2, 0, 1), self.legal_moves
 
   def reset(self):
     if self.board is None:
@@ -248,41 +251,41 @@ class Chess(gym.Env):
 
     return mask
 
-  def legal_move_mask_(self, state_119_8_8: np.ndarray) -> np.ndarray:
-      self.set_board_from_state(state_119_8_8)
-      mask = np.zeros((8, 8, 73), dtype=np.float32)
-
-      for move in self.board.legal_moves:
-          fromRow = 7 - (move.from_square // 8)
-          fromCol = (move.from_square % 8)
-
-          toRow = 7 - (move.to_square // 8)
-          toCol = (move.to_square % 8)
-
-          dRow = toRow - fromRow
-          dCol = toCol - fromCol
-
-          piece_type = self.board.piece_type_at(move.from_square)
-
-          if piece_type == 2:  # Knight
-              plane = self.knight_move2plane[dCol][dRow] + 56
-          else:  # 예: Queen move 등
-              if move.promotion and move.promotion in [2, 3, 4]:
-                  # Underpromotion
-                  if fromCol == toCol:
-                      plane = 64 + (move.promotion - 2)
-                  else:
-                      diagonal = self.get_diagonal(fromRow, fromCol, toRow, toCol)
-                      plane = 64 + (diagonal + 1) * 3 + (move.promotion - 2)
-              else:
-                  # Regular queen move
-                  squares = max(abs(dRow), abs(dCol))
-                  direction = self.get_direction(fromRow, fromCol, toRow, toCol)
-                  plane = (squares - 1) * 8 + direction
-
-          mask[fromRow, fromCol, plane] = 1.0
-
-      return mask
+  # def legal_move_mask_(self, state_119_8_8: np.ndarray) -> np.ndarray:
+  #     self.set_board_from_state(state_119_8_8)
+  #     mask = np.zeros((8, 8, 73), dtype=np.float32)
+  #
+  #     for move in self.board.legal_moves:
+  #         fromRow = 7 - (move.from_square // 8)
+  #         fromCol = (move.from_square % 8)
+  #
+  #         toRow = 7 - (move.to_square // 8)
+  #         toCol = (move.to_square % 8)
+  #
+  #         dRow = toRow - fromRow
+  #         dCol = toCol - fromCol
+  #
+  #         piece_type = self.board.piece_type_at(move.from_square)
+  #
+  #         if piece_type == 2:  # Knight
+  #             plane = self.knight_move2plane[dCol][dRow] + 56
+  #         else:  # 예: Queen move 등
+  #             if move.promotion and move.promotion in [2, 3, 4]:
+  #                 # Underpromotion
+  #                 if fromCol == toCol:
+  #                     plane = 64 + (move.promotion - 2)
+  #                 else:
+  #                     diagonal = self.get_diagonal(fromRow, fromCol, toRow, toCol)
+  #                     plane = 64 + (diagonal + 1) * 3 + (move.promotion - 2)
+  #             else:
+  #                 # Regular queen move
+  #                 squares = max(abs(dRow), abs(dCol))
+  #                 direction = self.get_direction(fromRow, fromCol, toRow, toCol)
+  #                 plane = (squares - 1) * 8 + direction
+  #
+  #         mask[fromRow, fromCol, plane] = 1.0
+  #
+  #     return mask
 
   def step(self, index):
     # mask = self.legal_move_mask()

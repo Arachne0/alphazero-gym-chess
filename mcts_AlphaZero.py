@@ -216,7 +216,7 @@ class MCTSPlayer(object):
         self.mcts.update_with_move(-1)
 
     def get_action(self, env, game_iter=0, temp=1e-3, return_prob=0):
-        move_probs = np.zeros(env.observe().shape[0] * env.observe().shape[1] * 73)
+        move_probs = np.zeros(8 * 8 * 73)
 
         if env.terminal is not True:
             acts, probs = self.mcts.get_move_probs(env, game_iter, temp)
@@ -238,6 +238,7 @@ class MCTSPlayer(object):
             if return_prob:
                 return move, move_probs
             else:
+                print(move)
                 return move
         else:
             print("WARNING: the board is full")

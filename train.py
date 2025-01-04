@@ -15,13 +15,15 @@ from collections import defaultdict, deque
 
 parser = argparse.ArgumentParser()
 
+""" Hyperparameter"""
+parser.add_argument("--n_playout", type=int, default=50)
+
 """ MCTS parameter """
 parser.add_argument("--buffer_size", type=int, default=10000)
 parser.add_argument("--c_puct", type=int, default=5)
 parser.add_argument("--epochs", type=int, default=10)
 parser.add_argument("--lr_multiplier", type=float, default=1.0)
-parser.add_argument("--n_playout", type=int, default=2)
-parser.add_argument("--self_play_sizes", type=int, default=2)
+parser.add_argument("--self_play_sizes", type=int, default=100)
 parser.add_argument("--training_iterations", type=int, default=100)
 parser.add_argument("--temp", type=float, default=1.0)
 
@@ -59,28 +61,28 @@ def get_equi_data(play_data):
     play_data: [(state, mcts_prob, winner_z), ..., ...]
     """
     extend_data = []
-    board_height = 8
-    board_width = 8
-    channel = 73
+    channel, board_width, board_height = 73, 8, 8
 
     for state, mcts_prob, winner in play_data:
         # Reshape mcts_prob into (channels, board_height, board_width)
         mcts_prob = mcts_prob.reshape(channel, board_height, board_width)
+        state_, action_mask_ = state[:7616].view(119, 8, 8), state[7616:].view(73, 8, 8)
 
         # Rotate counterclockwise
         for i in [1, 2, 3, 4]:
-            # print("reshape 이전:",state.shape)
-            equi_state = np.array([np.rot90(s, i) for s in state])
-            # equi_state = equi_state.reshape(board_channel, board_height, board_width)
-            # print("reshape 이후:",equi_state.shape)
+            equi_state = np.array([np.rot90(s, i) for s in state_])
+            equi_action_mask = np.array([np.rot90(s, i) for s in action_mask_])
             equi_mcts_prob = np.rot90(np.flipud(mcts_prob), i)
-            extend_data.append((equi_state, np.flipud(equi_mcts_prob).flatten(), winner))
 
-            # Flip horizontally
+            equi_state_ = np.concatenate([equi_state.flatten(), equi_action_mask.flatten()])
+            extend_data.append((equi_state_, np.flipud(equi_mcts_prob).flatten(), winner))
+
             equi_state = np.array([np.fliplr(s) for s in equi_state])
+            equi_action_mask = np.array([np.fliplr(s) for s in equi_action_mask])
             equi_mcts_prob = np.fliplr(equi_mcts_prob)
-            # print("flip 이후:", equi_state.shape)
-            extend_data.append((equi_state, np.flipud(equi_mcts_prob).flatten(), winner))
+
+            equi_state_ = np.concatenate([equi_state.flatten(), equi_action_mask.flatten()])
+            extend_data.append((equi_state_, np.flipud(equi_mcts_prob).flatten(), winner))
 
     return extend_data
 
@@ -109,7 +111,7 @@ def collect_selfplay_data(env, mcts_player, game_iter):
 
 
 def self_play(env, mcts_player, temp, game_iter=0, self_play_i=0):
-    state = env.reset()
+    env.reset()
     start_time = time.time()
 
     player_0 = 1
@@ -118,10 +120,14 @@ def self_play(env, mcts_player, temp, game_iter=0, self_play_i=0):
 
     with tqdm(total=1000, desc="Self-Play Progress", unit="game") as pbar:
         while True:
-            current_state = torch.tensor(env.observe().transpose(2, 0, 1).copy(), dtype=torch.float32)
+            obs, action_mask = env.observe()
+            obs = torch.tensor(obs.copy(), dtype=torch.float32)
+            action_mask = torch.tensor(action_mask.copy(), dtype=torch.int8)
+            combined_state = torch.cat([obs.flatten(), action_mask], dim=0)
+
             move, move_probs = mcts_player.get_action(env, game_iter, temp, return_prob=1)
 
-            states.append(current_state)
+            states.append(combined_state)
             mcts_probs.append(move_probs)
             current_player.append(player_0)
 
@@ -147,10 +153,12 @@ def self_play(env, mcts_player, temp, game_iter=0, self_play_i=0):
 
                 if env.reward != 0:  # non draw
                     if env.reward == -1:
-                        reward = 0
+                        env.reward = 0
                     # if winner is current player, winner_z = 1
-                    winners_z[np.array(current_player) == 1 - env.reward] = 1.0 # TODO 이거 맞는지 혹시나 해서 다시 확인해보자
+                    winners_z[np.array(current_player) == 1 - env.reward] = 1.0
                     winners_z[np.array(current_player) != 1 - env.reward] = -1.0
+                    if env.reward == 0:
+                        env.reward = -1
                 return env.reward, zip(states, mcts_probs, winners_z)
 
 
@@ -164,14 +172,18 @@ def policy_update(lr_mul, policy_value_net, data_buffers=None):
     state_batch = [data[0] for data in mini_batch]
     mcts_probs_batch = [data[1] for data in mini_batch]
     winner_batch = [data[2] for data in mini_batch]
-    old_probs, old_v = policy_value_net.policy_value(env, state_batch)
+
+    state_batch_ = np.array(state_batch)
+    state_batch = state_batch_[:, :7616].reshape(64, 119, 8, 8)
+    action_mask_batch = state_batch_[:, 7616:].reshape(64, 4672)
+    old_probs, old_v = policy_value_net.policy_value(state_batch, action_mask_batch)
 
     for i in range(epochs):
         loss, entropy = policy_value_net.train_step(state_batch,
                                                     mcts_probs_batch,
                                                     winner_batch,
                                                     learn_rate * lr_multiplier)
-        new_probs, new_v = policy_value_net.policy_value(env, state_batch)
+        new_probs, new_v = policy_value_net.policy_value(state_batch, action_mask_batch)
         kl = np.mean(np.sum(old_probs * (
                 np.log(old_probs + 1e-10) - np.log(new_probs + 1e-10)),
                             axis=1)
@@ -222,14 +234,13 @@ def start_play(env, player1, player2):
     players = {p1: player1, p2: player2}
     current_player = 0
     player_in_turn = players[current_player]
-    move_lists = []
+    move_list = []
     start_time = time.time()
 
     while True:
-        current_state = torch.tensor(env.observe().copy(), dtype=torch.float32)
-
         # synchronize the MCTS tree with the current state of the game
         move = player_in_turn.get_action(env, game_iter=-1, temp=1e-3, return_prob=0)
+        move_list.append(move)
         env.step(move)
 
         if not env.terminal:
@@ -237,11 +248,10 @@ def start_play(env, player1, player2):
             player_in_turn = players[current_player]
 
         else:
-
-            wandb.log({"eval/game_len": len(move_lists),
+            wandb.log({"eval/game_len": len(move_list),
                        "eval/reward": env.reward
                        })
-            return env.reward, len(move_lists)
+            return env.reward, len(move_list)
 
 
 if __name__ == '__main__':
@@ -250,7 +260,7 @@ if __name__ == '__main__':
 
     env = Chess()
     state = env.reset()
-    state = state.transpose(2, 0, 1)
+    state_, action_mask = state
 
     if torch.cuda.is_available():  # Windows
         device = torch.device("cuda")
@@ -258,9 +268,9 @@ if __name__ == '__main__':
         device = torch.device("mps")
 
     if init_model:
-        policy_value_net = PolicyValueNet(len(state[0]), len(state[1]), model_file=init_model)
+        policy_value_net = PolicyValueNet(len(state_[1]), len(state_[2]), model_file=init_model)
     else:
-        policy_value_net = PolicyValueNet(len(state[0]), len(state[1]))
+        policy_value_net = PolicyValueNet(len(state_[1]), len(state_[2]))
 
     curr_mcts_player = MCTSPlayer(policy_value_net.policy_value_fn, c_puct, n_playout, is_selfplay=1)
     data_buffer_training_iters = deque(maxlen=20)
@@ -287,7 +297,7 @@ if __name__ == '__main__':
                 old_i = max(existing_files)
                 best_old_model, _ = create_models(n_playout, (old_i - 1))
 
-            policy_value_net_old = PolicyValueNet(len(state[0]), len(state[1]), best_old_model)
+            policy_value_net_old = PolicyValueNet(len(state_[1]), len(state_[2]), best_old_model)
             old_mcts_player = MCTSPlayer(policy_value_net_old.policy_value_fn, c_puct, n_playout, is_selfplay=0)
 
             if (i + 1) % 10 == 0:  # save model 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 (1+10: total 11)
