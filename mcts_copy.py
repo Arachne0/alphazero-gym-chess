@@ -135,7 +135,7 @@ class MCTS(object):
         State is modified in-place, so a copy must be provided.
         """
         node = self._root
-        # depth_times, width_times = 0, 0
+        depth_times, width_times = 0, 0
         planning_depth = 0
 
         while(1):

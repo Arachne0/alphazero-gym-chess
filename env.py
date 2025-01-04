@@ -16,31 +16,6 @@ WHITE = 1
 BLACK = 0
 
 
-def __deepcopy__(self, memo):
-    new_instance = self.__class__.__new__(self.__class__)
-    memo[id(self)] = new_instance
-
-    new_instance.board = np.copy(self.board)
-    new_instance.state = np.copy(self.state)
-
-
-
-    new_instance.Colour_plane = copy.deepcopy(self.Colour_plane, memo)
-    new_instance.No_progress_count_plane = copy.deepcopy(self.No_progress_count_plane, memo)
-
-    new_instance.P1_piece_planes = copy.deepcopy(self.P1_piece_planes, memo)
-    new_instance.P1_castling_planes = copy.deepcopy(self.P1_castling_planes, memo)
-    new_instance.P2_piece_planes = copy.deepcopy(self.P2_piece_planes, memo)
-    new_instance.P2_castling_planes = copy.deepcopy(self.P2_castling_planes, memo)
-    new_instance.Repetitions_planes = copy.deepcopy(self.Repitations_planes, memo)
-    new_instance.Total_move_count_plane = copy.deepcopy(self.Total_move_count_plane, memo)
-    new_instance.binary_feature_planes = copy.deepcopy(self.binary_feature_planes, memo)
-
-    new_instance.action_space = self.action_space
-
-    return new_instance
-
-
 def is_repetition(self, count: int = 3) -> bool:
     """
     Checks if the current position has repeated 3 (or a given number of)
@@ -134,20 +109,29 @@ class Chess(gym.Env):
                               "Underpromotions": Tuple(MultiBinary((8, 8)) for move in range(9))})
 
   def __deepcopy__(self, memo):
-    # 새로운 Chess 객체 생성
     new_obj = Chess()
 
     new_obj.board = copy.deepcopy(self.board, memo)  # board 복사
     new_obj.T = self.T
     new_obj.M = self.M
     new_obj.L = self.L
-
     new_obj.size = self.size
+
+    new_obj.Colour_plane = copy.deepcopy(self.Colour_plane, memo)
+    new_obj.No_progress_count_plane = copy.deepcopy(self.No_progress_count_plane, memo)
+    new_obj.P1_piece_planes = copy.deepcopy(self.P1_piece_planes, memo)
+    new_obj.P1_castling_planes = copy.deepcopy(self.P1_castling_planes, memo)
+    new_obj.P2_piece_planes = copy.deepcopy(self.P2_piece_planes, memo)
+    new_obj.P2_castling_planes = copy.deepcopy(self.P2_castling_planes, memo)
+
+    new_obj.Repetitions_planes = copy.deepcopy(self.Repetitions_planes, memo)
+    new_obj.Total_move_count_plane = copy.deepcopy(self.Total_move_count_plane, memo)
+    new_obj.binary_feature_planes = copy.deepcopy(self.binary_feature_planes, memo)
+    new_obj.constant_value_planes = copy.deepcopy(self.constant_value_planes, memo)
 
     new_obj.knight_move2plane = copy.deepcopy(self.knight_move2plane, memo)
     new_obj.observation_space = copy.deepcopy(self.observation_space, memo)
     new_obj.state_history = copy.deepcopy(self.state_history, memo)
-    # new_obj.action_space = copy.deepcopy(self.action_space, memo)
 
     return new_obj
 
@@ -211,17 +195,24 @@ class Chess(gym.Env):
   def reset(self):
     if self.board is None:
       self.board = chess.Board()
-
     self.board.reset()
-
     self.turn = WHITE
-
     self.reward = None
     self.terminal = False
 
     # Initialize states before timestep 1 to matrices containing all zeros
     self.state_history = np.zeros((8, 8, 14 * self.T + 7))
     return self.observe()
+
+  def set_board_from_state(self, state_119_8_8: np.ndarray):
+      self.board.reset()
+
+      plane_white_pawns = state_119_8_8[0]  # shape = (8, 8)
+      for row in range(8):
+          for col in range(8):
+              if plane_white_pawns[row, col] == 1:
+                  square = chess.square(col, 7 - row)
+                  self.board.set_piece_at(square, chess.Piece(chess.PAWN, chess.WHITE))
 
   def legal_move_mask(self):
     mask = np.zeros((8, 8, 73))
@@ -256,6 +247,42 @@ class Chess(gym.Env):
       mask[fromRow, fromCol, plane] = 1
 
     return mask
+
+  def legal_move_mask_(self, state_119_8_8: np.ndarray) -> np.ndarray:
+      self.set_board_from_state(state_119_8_8)
+      mask = np.zeros((8, 8, 73), dtype=np.float32)
+
+      for move in self.board.legal_moves:
+          fromRow = 7 - (move.from_square // 8)
+          fromCol = (move.from_square % 8)
+
+          toRow = 7 - (move.to_square // 8)
+          toCol = (move.to_square % 8)
+
+          dRow = toRow - fromRow
+          dCol = toCol - fromCol
+
+          piece_type = self.board.piece_type_at(move.from_square)
+
+          if piece_type == 2:  # Knight
+              plane = self.knight_move2plane[dCol][dRow] + 56
+          else:  # 예: Queen move 등
+              if move.promotion and move.promotion in [2, 3, 4]:
+                  # Underpromotion
+                  if fromCol == toCol:
+                      plane = 64 + (move.promotion - 2)
+                  else:
+                      diagonal = self.get_diagonal(fromRow, fromCol, toRow, toCol)
+                      plane = 64 + (diagonal + 1) * 3 + (move.promotion - 2)
+              else:
+                  # Regular queen move
+                  squares = max(abs(dRow), abs(dCol))
+                  direction = self.get_direction(fromRow, fromCol, toRow, toCol)
+                  plane = (squares - 1) * 8 + direction
+
+          mask[fromRow, fromCol, plane] = 1.0
+
+      return mask
 
   def step(self, index):
     # mask = self.legal_move_mask()
@@ -369,30 +396,3 @@ class Chess(gym.Env):
     self.info = {'last_move': move, 'turn': self.board.turn}
 
     return self.observe(), self.reward, self.terminal, self.info
-
-  # def get_image(self):
-  #   out = BytesIO()
-  #   bytestring = chess.svg.board(self.board, size=1000).encode('utf-8')
-  #   cairosvg.svg2png(bytestring=bytestring, write_to=out)
-  #   image = Image.open(out).convert("RGB")
-  #   return np.asarray(image).astype(np.uint8)
-  #
-  # def render(self, mode='human'):
-  #   img = self.get_image()
-  #
-  #   if mode == 'rgb_array':
-  #     return img
-  #   elif mode == 'human':
-  #     if self.viewer is None:
-  #       from gym.envs.classic_control import rendering
-  #       self.viewer = rendering.SimpleImageViewer()
-  #
-  #     self.viewer.imshow(img)
-  #     return self.viewer.isopen
-  #   else:
-  #     raise NotImplementedError
-
-
-  # def close(self):
-  #   if not self.viewer is None:
-  #     self.viewer.close()

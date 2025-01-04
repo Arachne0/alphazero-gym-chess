@@ -1,16 +1,15 @@
 import torch
 import argparse
 import numpy as np
-import datetime
 import random
 import os
 import time
 import wandb
 
-
+from tqdm import tqdm
 from env import Chess
-# from pettingzoo.classic import chess_v6
 from mcts_AlphaZero import MCTSPlayer
+from file_utils import *
 from network import PolicyValueNet
 from collections import defaultdict, deque
 
@@ -21,13 +20,13 @@ parser.add_argument("--buffer_size", type=int, default=10000)
 parser.add_argument("--c_puct", type=int, default=5)
 parser.add_argument("--epochs", type=int, default=10)
 parser.add_argument("--lr_multiplier", type=float, default=1.0)
-parser.add_argument("--n_playout", type=int, default=50)
-parser.add_argument("--self_play_sizes", type=int, default=50)
+parser.add_argument("--n_playout", type=int, default=2)
+parser.add_argument("--self_play_sizes", type=int, default=2)
 parser.add_argument("--training_iterations", type=int, default=100)
 parser.add_argument("--temp", type=float, default=1.0)
 
 """ Policy update parameter """
-parser.add_argument("--batch_size", type=int, default=256)
+parser.add_argument("--batch_size", type=int, default=64)
 parser.add_argument("--learn_rate", type=float, default=1e-3)
 parser.add_argument("--lr_mul", type=float, default=1.0)
 parser.add_argument("--kl_targ", type=float, default=0.02)
@@ -62,22 +61,27 @@ def get_equi_data(play_data):
     extend_data = []
     board_height = 8
     board_width = 8
-    channels = 73
+    channel = 73
+
     for state, mcts_prob, winner in play_data:
+        # Reshape mcts_prob into (channels, board_height, board_width)
+        mcts_prob = mcts_prob.reshape(channel, board_height, board_width)
+
+        # Rotate counterclockwise
         for i in [1, 2, 3, 4]:
-            # rotate counterclockwise
+            # print("reshape 이전:",state.shape)
             equi_state = np.array([np.rot90(s, i) for s in state])
-            equi_mcts_prob = np.rot90(np.flipud(
-                mcts_prob.reshape(channels, board_height, board_width)), i)
-            extend_data.append((equi_state,
-                                np.flipud(equi_mcts_prob).flatten(),
-                                winner))
-            # flip horizontally
+            # equi_state = equi_state.reshape(board_channel, board_height, board_width)
+            # print("reshape 이후:",equi_state.shape)
+            equi_mcts_prob = np.rot90(np.flipud(mcts_prob), i)
+            extend_data.append((equi_state, np.flipud(equi_mcts_prob).flatten(), winner))
+
+            # Flip horizontally
             equi_state = np.array([np.fliplr(s) for s in equi_state])
             equi_mcts_prob = np.fliplr(equi_mcts_prob)
-            extend_data.append((equi_state,
-                                np.flipud(equi_mcts_prob).flatten(),
-                                winner))
+            # print("flip 이후:", equi_state.shape)
+            extend_data.append((equi_state, np.flipud(equi_mcts_prob).flatten(), winner))
+
     return extend_data
 
 
@@ -93,7 +97,6 @@ def collect_selfplay_data(env, mcts_player, game_iter):
         # augment the data
         play_data = get_equi_data(play_data)
         data_buffer.extend(play_data)
-
         win_cnt[rewards] += 1
 
     print("\n ---------- Self-Play win: {}, lose: {}, tie:{} ----------".format(win_cnt[1], win_cnt[-1], win_cnt[0]))
@@ -113,45 +116,42 @@ def self_play(env, mcts_player, temp, game_iter=0, self_play_i=0):
     player_1 = 1 - player_0
     states, mcts_probs, current_player = [], [], []
 
-    while True:
-        current_state = torch.tensor(env.observe().copy(), dtype=torch.float32)
-        move, move_probs = mcts_player.get_action(env, state, temp, return_prob=1)
+    with tqdm(total=1000, desc="Self-Play Progress", unit="game") as pbar:
+        while True:
+            current_state = torch.tensor(env.observe().transpose(2, 0, 1).copy(), dtype=torch.float32)
+            move, move_probs = mcts_player.get_action(env, game_iter, temp, return_prob=1)
 
-        states.append(current_state)
-        mcts_probs.append(move_probs)
-        current_player.append(player_0)
+            states.append(current_state)
+            mcts_probs.append(move_probs)
+            current_player.append(player_0)
 
-        env.step(move)
+            env.step(move)
 
-        player_0 = 1 - player_0
-        player_1 = 1 - player_0
+            player_0 = 1 - player_0
+            player_1 = 1 - player_0
 
-        if env.terminal is True:
-            # recode time
-            iteration_time = time.time() - start_time
-            formatted_time = time.strftime("%H:%M:%S", time.gmtime(iteration_time))
-            print(formatted_time)
+            pbar.update(1)
 
-            wandb.log({"selfplay/iteration_time": float(iteration_time),
-                       "selfplay/reward": env.reward,
-                       "selfplay/game_len": len(current_player)
-                       })
+            if env.terminal is True:
+                wandb.log({"selfplay/reward": env.reward,
+                           "selfplay/game_len": len(current_player)
+                           })
 
-            if env.reward == 0:
-                print('self_play_draw')
+                if env.reward == 0:
+                    print('self_play_draw')
 
-            mcts_player.reset_player()  # reset MCTS root node
-            print("game: {}, self_play:{}, episode_len:{}".format(
-                game_iter + 1, self_play_i + 1, len(current_player)))
-            winners_z = np.zeros(len(current_player))
+                mcts_player.reset_player()  # reset MCTS root node
+                print("game: {}, self_play:{}, episode_len:{}".format(
+                    game_iter + 1, self_play_i + 1, len(current_player)))
+                winners_z = np.zeros(len(current_player))
 
-            if env.reward != 0:  # non draw
-                if env.reward == -1:
-                    reward = 0
-                # if winner is current player, winner_z = 1
-                winners_z[np.array(current_player) == 1 - env.reward] = 1.0
-                winners_z[np.array(current_player) != 1 - env.reward] = -1.0
-            return env.reward, zip(states, mcts_probs, winners_z)
+                if env.reward != 0:  # non draw
+                    if env.reward == -1:
+                        reward = 0
+                    # if winner is current player, winner_z = 1
+                    winners_z[np.array(current_player) == 1 - env.reward] = 1.0 # TODO 이거 맞는지 혹시나 해서 다시 확인해보자
+                    winners_z[np.array(current_player) != 1 - env.reward] = -1.0
+                return env.reward, zip(states, mcts_probs, winners_z)
 
 
 def policy_update(lr_mul, policy_value_net, data_buffers=None):
@@ -164,14 +164,14 @@ def policy_update(lr_mul, policy_value_net, data_buffers=None):
     state_batch = [data[0] for data in mini_batch]
     mcts_probs_batch = [data[1] for data in mini_batch]
     winner_batch = [data[2] for data in mini_batch]
-    old_probs, old_v = policy_value_net.policy_value(state_batch)
+    old_probs, old_v = policy_value_net.policy_value(env, state_batch)
 
     for i in range(epochs):
         loss, entropy = policy_value_net.train_step(state_batch,
                                                     mcts_probs_batch,
                                                     winner_batch,
                                                     learn_rate * lr_multiplier)
-        new_probs, new_v = policy_value_net.policy_value(state_batch)
+        new_probs, new_v = policy_value_net.policy_value(env, state_batch)
         kl = np.mean(np.sum(old_probs * (
                 np.log(old_probs + 1e-10) - np.log(new_probs + 1e-10)),
                             axis=1)
@@ -229,7 +229,7 @@ def start_play(env, player1, player2):
         current_state = torch.tensor(env.observe().copy(), dtype=torch.float32)
 
         # synchronize the MCTS tree with the current state of the game
-        move = player_in_turn.get_action(env, current_state, temp=1e-3, return_prob=0)
+        move = player_in_turn.get_action(env, game_iter=-1, temp=1e-3, return_prob=0)
         env.step(move)
 
         if not env.terminal:
@@ -237,27 +237,20 @@ def start_play(env, player1, player2):
             player_in_turn = players[current_player]
 
         else:
-            iteration_time_ = time.time() - start_time
-            formatted_time = time.strftime("%H:%M:%S", time.gmtime(iteration_time_))
-            print(formatted_time)
+
             wandb.log({"eval/game_len": len(move_lists),
-                       "eval/reward": env.reward,
-                       "eval/iteration_time": float(iteration_time_)
+                       "eval/reward": env.reward
                        })
             return env.reward, len(move_lists)
 
 
 if __name__ == '__main__':
     # wandb intialize
-    wandb.init(entity="hails",
-               project="gym_chess",
-               name="gym-Chess" + "-MCTS" + str(n_playout),
-               config=args.__dict__
-               )
+    initialize_wandb(args, n_playout=n_playout)
 
     env = Chess()
     state = env.reset()
-    height, width, channels = state.shape
+    state = state.transpose(2, 0, 1)
 
     if torch.cuda.is_available():  # Windows
         device = torch.device("cuda")
@@ -265,9 +258,9 @@ if __name__ == '__main__':
         device = torch.device("mps")
 
     if init_model:
-        policy_value_net = PolicyValueNet(height, width, model_file=init_model)
+        policy_value_net = PolicyValueNet(len(state[0]), len(state[1]), model_file=init_model)
     else:
-        policy_value_net = PolicyValueNet(height, width)
+        policy_value_net = PolicyValueNet(len(state[0]), len(state[1]))
 
     curr_mcts_player = MCTSPlayer(policy_value_net.policy_value_fn, c_puct, n_playout, is_selfplay=1)
     data_buffer_training_iters = deque(maxlen=20)
@@ -285,32 +278,24 @@ if __name__ == '__main__':
                                                                            data_buffers=data_buffer_training_iters)
             if i == 0:
                 policy_evaluate(env, curr_mcts_player, curr_mcts_player)
-
-                model_file = f"Training/nmcts{n_playout}/train_{i + 1:03d}.pth"
-                eval_model_file = f"Eval/nmcts{n_playout}/train_{i + 1:03d}.pth"
-
+                model_file, eval_model_file = create_models(n_playout, i)
                 policy_value_net.save_model(model_file)
                 policy_value_net.save_model(eval_model_file)
 
             else:
-                existing_files = [int(file.split('_')[-1].split('.')[0])
-                                  for file in os.listdir(f"Training/nmcts{n_playout}")
-                                  if file.startswith('train_')]
+                existing_files = get_existing_files(n_playout=n_playout)
                 old_i = max(existing_files)
-                best_old_model = f"Training/nmcts{n_playout}/train_{old_i:03d}.pth"
+                best_old_model, _ = create_models(n_playout, (old_i - 1))
 
-            policy_value_net_old = PolicyValueNet(env.observe('player_0')['observation'].shape[0],
-                                                  env.observe('player_0')['observation'].shape[1],
-                                                  best_old_model)
+            policy_value_net_old = PolicyValueNet(len(state[0]), len(state[1]), best_old_model)
+            old_mcts_player = MCTSPlayer(policy_value_net_old.policy_value_fn, c_puct, n_playout, is_selfplay=0)
 
-            old_mcts_player = MCTSPlayer(policy_value_net_old.policy_value_fn, c_puct, n_playout,
-                                         is_selfplay=0)
+            if (i + 1) % 10 == 0:  # save model 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 (1+10: total 11)
+                _, eval_model_file = create_models(n_playout, i)
+                policy_value_net.save_model(eval_model_file)
 
-            if (i + 1) % 10 == 0:
-                eval_model_file = f"Eval/nmcts{n_playout}/train_{i + 1:03d}.pth"
-
-            policy_value_net.save_model(eval_model_file)
             print("Win rate : ", round(win_ratio * 100, 3), "%")
+            wandb.log({"Win_Rate/Evaluate": round(win_ratio * 100, 3)})
 
             if win_ratio > 0.5:
                 old_mcts_player = curr_mcts_player

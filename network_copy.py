@@ -14,24 +14,9 @@ def set_learning_rate(optimizer, lr):
         param_group['lr'] = lr
 
 
-def compute_masked_act_probs(env, log_act_probs, state_batch):
+def compute_masked_act_probs(log_act_probs, state_batch, env):
     act_probs = torch.exp(log_act_probs).cpu().numpy()
     masked_act_probs = np.zeros_like(act_probs)
-
-    for i in range(len(state_batch)):
-        state_np = state_batch[i].cpu().numpy()
-        mask_ = env.legal_move_mask_(state_np)
-        mask = mask_.flatten()
-        masked_act_probs[i][mask == 1.0] = act_probs[i][mask == 1.0]
-
-        s = masked_act_probs[i].sum()
-        if s > 1e-12:
-            masked_act_probs[i] /= s
-        else:
-            masked_act_probs[i] = act_probs[i]
-
-        is_all_different = len(masked_act_probs) == len(np.unique(masked_act_probs, axis=0))
-    return masked_act_probs
 
     # available_mask = (state_batch[:, 3] == 0).cpu().float().numpy()  # 여기 state의 3번째 껄 사용하는게 아니라 state_batch 의 0번 1번.. 을 받아서 그때의 masking을 구할 수 있게
     # available_mask = available_mask.reshape(64, 4672)
@@ -44,6 +29,21 @@ def compute_masked_act_probs(env, log_act_probs, state_batch):
     #     act_probs = masked_act_probs / (masked_act_probs.sum() + 1)
     #
     # return act_probs
+
+    for i in range(len(state_batch)):
+        state_np = state_batch[i].cpu().numpy()
+        mask_ = env.legal_move_mask_(state_np)
+        mask = mask_.flatten()
+
+        masked_act_probs[i][mask == 1.0] = act_probs[i][mask == 1.0]
+
+        s = masked_act_probs[i].sum()
+        if s > 1e-12:
+            masked_act_probs[i] /= s
+        else:
+            masked_act_probs[i] = act_probs[i]
+
+    return masked_act_probs
 
 
 
@@ -222,7 +222,7 @@ class PolicyValueNet():
             net_params = torch.load(model_file, map_location=self.device, weights_only=True)
             self.policy_value_net.load_state_dict(net_params)
 
-    def policy_value(self, env, state_batch):
+    def policy_value(self, state_batch):
         """
         input: a batch of states
         output: a batch of action probabilities and state values
@@ -231,7 +231,7 @@ class PolicyValueNet():
         state_batch = torch.tensor(state_batch, dtype=torch.float32, device=self.device)
         with torch.no_grad():
             log_act_probs, value = self.policy_value_net(state_batch)
-            act_probs = compute_masked_act_probs(env, log_act_probs, state_batch)
+            act_probs = compute_masked_act_probs(log_act_probs, state_batch)
 
         return act_probs, value
 
