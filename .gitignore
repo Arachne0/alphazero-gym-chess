@@ -5,6 +5,7 @@ logs/
 wandb/
 Training/
 Eval/
+prev_codes/
 
 prev_codes/mcts_copy.py
 fiar_env_copy.py

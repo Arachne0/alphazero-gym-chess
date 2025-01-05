@@ -44,6 +44,7 @@ cario 때문에 추가적으로 Linux에서 해결해야할 수도 있음
 # Linux
 ```bash
 sudo apt-get update
+python3 -m pip install cairosvg
 sudo apt-get install libcairo2 libcairo2-dev
 pip install chess
 pip install Pillow
