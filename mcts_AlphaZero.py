@@ -12,35 +12,6 @@ def softmax(x):
     probs /= np.sum(probs)
     return probs
 
-# def label_moves(df):
-#     df['player'] = [(8 if i % 2 == 0 else 9) for i in range(len(df))]
-#     return df
-#
-#
-# def move_map_black(move):
-#     TOTAL = 73
-#     source = move.from_square
-#     coord = ut.square_to_coord(source)
-#     panel = ut.get_move_plane(move)
-#     cur_action = (coord[0] * 8 + coord[1]) * TOTAL + panel
-#     return cur_action
-
-
-# def move_map_white(uci_move):
-#     TOTAL = 73
-#     move = chess.Move.from_uci(uci_move)
-#     source = move.from_square
-#     coord = ut.square_to_coord(source)
-#     panel = ut.get_move_plane(move)
-#     cur_action = (coord[0] * 8 + coord[1]) * TOTAL + panel
-#     return cur_action
-#
-#
-# def black_move(uci_move):
-#     move = chess.Move.from_uci(uci_move)
-#     mir = ut.mirror_move(move)
-#     return mir
-
 
 class TreeNode(object):
     """A node in the MCTS tree.
@@ -129,7 +100,7 @@ class MCTS(object):
         self._c_puct = c_puct
         self._n_playout = n_playout
 
-    def _playout(self, env, game_iter):
+    def _playout(self, env):
         """Run a single playout from the root to the leaf, getting a value at
         the leaf and propagating it back through its parents.
         State is modified in-place, so a copy must be provided.
@@ -142,10 +113,6 @@ class MCTS(object):
             planning_depth += 1
             if node.is_leaf():
                 break
-
-            if game_iter+1 in [1, 10, 20, 31, 50, 100]:
-                graph_name = f"depth_fre/game_iter_{game_iter+1}"
-                wandb.log({graph_name: planning_depth})
 
             # Greedily select next move.
             action, node = node.select(self._c_puct)
@@ -169,6 +136,8 @@ class MCTS(object):
         # Update value and visit count of nodes in this traversal.
         node.update_recursive(-leaf_value)
 
+        return planning_depth
+
     def get_move_probs(self, env, game_iter, temp=1e-3):
         """Run all playouts sequentially and return the available actions and
         their corresponding probabilities.
@@ -177,7 +146,11 @@ class MCTS(object):
         """
         for n in range(self._n_playout):
             env_copy = copy.deepcopy(env)
-            self._playout(env_copy, game_iter)
+            planning_depth = self._playout(env_copy)
+
+            if game_iter+1 in [1, 10, 20, 31, 50, 100, 200, 300, 500, 700, 1000, 1200, 1500, 1700, 2000]:
+                graph_name = f"depth_fre/game_iter_{game_iter+1}"
+                wandb.log({graph_name: planning_depth})
 
         # calc the move probabilities based on visit counts at the root node
         act_visits = [(act, node._n_visits)

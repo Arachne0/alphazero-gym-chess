@@ -16,7 +16,7 @@ from collections import defaultdict, deque
 parser = argparse.ArgumentParser()
 
 """ Hyperparameter"""
-parser.add_argument("--n_playout", type=int, default=50)
+parser.add_argument("--n_playout", type=int, default=2)
 
 """ MCTS parameter """
 parser.add_argument("--buffer_size", type=int, default=10000)
@@ -56,35 +56,35 @@ win_ratio = args.win_ratio
 init_model = args.init_model
 
 
-def get_equi_data(play_data):
-    """augment the data set by rotation and flipping
-    play_data: [(state, mcts_prob, winner_z), ..., ...]
-    """
-    extend_data = []
-    channel, board_width, board_height = 73, 8, 8
-
-    for state, mcts_prob, winner in play_data:
-        # Reshape mcts_prob into (channels, board_height, board_width)
-        mcts_prob = mcts_prob.reshape(channel, board_height, board_width)
-        state_, action_mask_ = state[:7616].view(119, 8, 8), state[7616:].view(73, 8, 8)
-
-        # Rotate counterclockwise
-        for i in [1, 2, 3, 4]:
-            equi_state = np.array([np.rot90(s, i) for s in state_])
-            equi_action_mask = np.array([np.rot90(s, i) for s in action_mask_])
-            equi_mcts_prob = np.rot90(np.flipud(mcts_prob), i)
-
-            equi_state_ = np.concatenate([equi_state.flatten(), equi_action_mask.flatten()])
-            extend_data.append((equi_state_, np.flipud(equi_mcts_prob).flatten(), winner))
-
-            equi_state = np.array([np.fliplr(s) for s in equi_state])
-            equi_action_mask = np.array([np.fliplr(s) for s in equi_action_mask])
-            equi_mcts_prob = np.fliplr(equi_mcts_prob)
-
-            equi_state_ = np.concatenate([equi_state.flatten(), equi_action_mask.flatten()])
-            extend_data.append((equi_state_, np.flipud(equi_mcts_prob).flatten(), winner))
-
-    return extend_data
+# def get_equi_data(play_data):
+#     """augment the data set by rotation and flipping
+#     play_data: [(state, mcts_prob, winner_z), ..., ...]
+#     """
+#     extend_data = []
+#     channel, board_width, board_height = 73, 8, 8
+#
+#     for state, mcts_prob, winner in play_data:
+#         # Reshape mcts_prob into (channels, board_height, board_width)
+#         mcts_prob = mcts_prob.reshape(channel, board_height, board_width)
+#         state_, action_mask_ = state[:7616].view(119, 8, 8), state[7616:].view(73, 8, 8)
+#
+#         # Rotate counterclockwise
+#         for i in [1, 2, 3, 4]:
+#             equi_state = np.array([np.rot90(s, i) for s in state_])
+#             equi_action_mask = np.array([np.rot90(s, i) for s in action_mask_])
+#             equi_mcts_prob = np.rot90(np.flipud(mcts_prob), i)
+#
+#             equi_state_ = np.concatenate([equi_state.flatten(), equi_action_mask.flatten()])
+#             extend_data.append((equi_state_, np.flipud(equi_mcts_prob).flatten(), winner))
+#
+#             equi_state = np.array([np.fliplr(s) for s in equi_state])
+#             equi_action_mask = np.array([np.fliplr(s) for s in equi_action_mask])
+#             equi_mcts_prob = np.fliplr(equi_mcts_prob)
+#
+#             equi_state_ = np.concatenate([equi_state.flatten(), equi_action_mask.flatten()])
+#             extend_data.append((equi_state_, np.flipud(equi_mcts_prob).flatten(), winner))
+#
+#     return extend_data
 
 
 def collect_selfplay_data(env, mcts_player, game_iter):
@@ -97,7 +97,7 @@ def collect_selfplay_data(env, mcts_player, game_iter):
         play_data = list(play_data)[:]
 
         # augment the data
-        play_data = get_equi_data(play_data)
+        # play_data = get_equi_data(play_data)
         data_buffer.extend(play_data)
         win_cnt[rewards] += 1
 
@@ -118,48 +118,45 @@ def self_play(env, mcts_player, temp, game_iter=0, self_play_i=0):
     player_1 = 1 - player_0
     states, mcts_probs, current_player = [], [], []
 
-    with tqdm(total=1000, desc="Self-Play Progress", unit="game") as pbar:
-        while True:
-            obs, action_mask = env.observe()
-            obs = torch.tensor(obs.copy(), dtype=torch.float32)
-            action_mask = torch.tensor(action_mask.copy(), dtype=torch.int8)
-            combined_state = torch.cat([obs.flatten(), action_mask], dim=0)
+    while True:
+        obs, action_mask = env.observe()
+        obs = torch.tensor(obs.copy(), dtype=torch.float32)
+        action_mask = torch.tensor(action_mask.copy(), dtype=torch.int8)
+        combined_state = torch.cat([obs.flatten(), action_mask], dim=0)
 
-            move, move_probs = mcts_player.get_action(env, game_iter, temp, return_prob=1)
+        move, move_probs = mcts_player.get_action(env, game_iter, temp, return_prob=1)
 
-            states.append(combined_state)
-            mcts_probs.append(move_probs)
-            current_player.append(player_0)
+        states.append(combined_state)
+        mcts_probs.append(move_probs)
+        current_player.append(player_0)
 
-            env.step(move)
+        env.step(move)
 
-            player_0 = 1 - player_0
-            player_1 = 1 - player_0
+        player_0 = 1 - player_0
+        player_1 = 1 - player_0
 
-            pbar.update(1)
+        if env.terminal is True:
+            wandb.log({"selfplay/reward": env.reward,
+                       "selfplay/game_len": len(current_player)
+                       })
 
-            if env.terminal is True:
-                wandb.log({"selfplay/reward": env.reward,
-                           "selfplay/game_len": len(current_player)
-                           })
+            if env.reward == 0:
+                print('self_play_draw')
 
+            mcts_player.reset_player()  # reset MCTS root node
+            print("game: {}, self_play:{}, episode_len:{}".format(
+                game_iter + 1, self_play_i + 1, len(current_player)))
+            winners_z = np.zeros(len(current_player))
+
+            if env.reward != 0:  # non draw
+                if env.reward == -1:
+                    env.reward = 0
+                # if winner is current player, winner_z = 1
+                winners_z[np.array(current_player) == 1 - env.reward] = 1.0
+                winners_z[np.array(current_player) != 1 - env.reward] = -1.0
                 if env.reward == 0:
-                    print('self_play_draw')
-
-                mcts_player.reset_player()  # reset MCTS root node
-                print("game: {}, self_play:{}, episode_len:{}".format(
-                    game_iter + 1, self_play_i + 1, len(current_player)))
-                winners_z = np.zeros(len(current_player))
-
-                if env.reward != 0:  # non draw
-                    if env.reward == -1:
-                        env.reward = 0
-                    # if winner is current player, winner_z = 1
-                    winners_z[np.array(current_player) == 1 - env.reward] = 1.0
-                    winners_z[np.array(current_player) != 1 - env.reward] = -1.0
-                    if env.reward == 0:
-                        env.reward = -1
-                return env.reward, zip(states, mcts_probs, winners_z)
+                    env.reward = -1
+            return env.reward, zip(states, mcts_probs, winners_z)
 
 
 def policy_update(lr_mul, policy_value_net, data_buffers=None):
@@ -297,9 +294,10 @@ if __name__ == '__main__':
                 old_i = max(existing_files)
                 best_old_model, _ = create_models(n_playout, (old_i - 1))
 
-            policy_value_net_old = PolicyValueNet(len(state_[1]), len(state_[2]), best_old_model)
-            old_mcts_player = MCTSPlayer(policy_value_net_old.policy_value_fn, c_puct, n_playout, is_selfplay=0)
+                policy_value_net_old = PolicyValueNet(len(state_[1]), len(state_[2]), best_old_model)
+                old_mcts_player = MCTSPlayer(policy_value_net_old.policy_value_fn, c_puct, n_playout, is_selfplay=0)
 
+                win_ratio, curr_mcts_player = policy_evaluate(env, curr_mcts_player, old_mcts_player)
             if (i + 1) % 10 == 0:  # save model 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 (1+10: total 11)
                 _, eval_model_file = create_models(n_playout, i)
                 policy_value_net.save_model(eval_model_file)
