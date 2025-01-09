@@ -3,9 +3,6 @@ import numpy as np
 import copy
 import wandb
 
-# from pettingzoo.classic import chess_v6
-# from pettingzoo.classic.chess import chess_utils as ut
-
 
 def softmax(x):
     probs = np.exp(x - np.max(x))
@@ -211,7 +208,6 @@ class MCTSPlayer(object):
             if return_prob:
                 return move, move_probs
             else:
-                print(move)
                 return move
         else:
             print("WARNING: the board is full")

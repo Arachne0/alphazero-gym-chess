@@ -119,7 +119,7 @@ def self_play(env, mcts_player, temp, game_iter=0, self_play_i=0):
     states, mcts_probs, current_player = [], [], []
 
     while True:
-        obs, action_mask = env.observe()
+        obs, action_mask = env.observe() #
         obs = torch.tensor(obs.copy(), dtype=torch.float32)
         action_mask = torch.tensor(action_mask.copy(), dtype=torch.int8)
         combined_state = torch.cat([obs.flatten(), action_mask], dim=0)
@@ -170,7 +170,7 @@ def policy_update(lr_mul, policy_value_net, data_buffers=None):
     mcts_probs_batch = [data[1] for data in mini_batch]
     winner_batch = [data[2] for data in mini_batch]
 
-    state_batch_ = np.array(state_batch)
+    state_batch_ = np.array(state_batch) #here
     state_batch = state_batch_[:, :7616].reshape(64, 119, 8, 8)
     action_mask_batch = state_batch_[:, 7616:].reshape(64, 4672)
     old_probs, old_v = policy_value_net.policy_value(state_batch, action_mask_batch)
