@@ -191,9 +191,9 @@ class Chess(gym.Env):
     self.state_history = self.state_history[:, :, 14:-7]
     self.state_history = np.concatenate((self.state_history, self.binary_feature_planes, self.constant_value_planes), axis = -1)
 
-    self.legal_moves = self.legal_move_mask().flatten()
+    # self.legal_moves = self.legal_move_mask()
 
-    return self.state_history.transpose(2, 0, 1), self.legal_moves
+    return self.state_history
 
   def reset(self):
     if self.board is None:

@@ -103,7 +103,6 @@ class MCTS(object):
         State is modified in-place, so a copy must be provided.
         """
         node = self._root
-        # depth_times, width_times = 0, 0
         planning_depth = 0
 
         while(1):
@@ -118,11 +117,10 @@ class MCTS(object):
         available, action_probs, leaf_value = self._policy(env)
         action_probs = zip(available, action_probs[available])
 
-        if env.terminal is not True:
+        if env.terminal is False:
             node.expand(action_probs)
 
         else:
-            # reward = env.reward
             if env.reward == 0:  # tie
                 leaf_value = 0.0
             elif env.reward == env.turn:
@@ -142,8 +140,8 @@ class MCTS(object):
         temp: temperature parameter in (0, 1] controls the level of exploration
         """
         for n in range(self._n_playout):
-            env_copy = copy.deepcopy(env)
-            planning_depth = self._playout(env_copy)
+            env_ = copy.deepcopy(env)
+            planning_depth = self._playout(env_)
 
             if game_iter+1 in [1, 10, 20, 31, 50, 100, 200, 300, 500, 700, 1000, 1200, 1500, 1700, 2000]:
                 graph_name = f"depth_fre/game_iter_{game_iter+1}"
@@ -188,7 +186,7 @@ class MCTSPlayer(object):
     def get_action(self, env, game_iter=0, temp=1e-3, return_prob=0):
         move_probs = np.zeros(8 * 8 * 73)
 
-        if env.terminal is not True:
+        if not env.terminal:
             acts, probs = self.mcts.get_move_probs(env, game_iter, temp)
             move_probs[list(acts)] = probs
             if self._is_selfplay:

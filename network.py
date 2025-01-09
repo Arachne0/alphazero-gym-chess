@@ -227,9 +227,9 @@ class PolicyValueNet():
             move_ = sensible_moves(env, move)
             available.append(uci_move_to_index(move_))
 
-        current_state, action_mask = env.observe()
+        current_state = env.observe()
         current_state = torch.tensor(current_state.copy(), dtype=torch.float32)
-        current_state = current_state.unsqueeze(0).to(self.device)  # (119, 8, 8) -> (1, 119, 8, 8)
+        current_state = current_state.permute(2, 0, 1).unsqueeze(0).to(self.device)  # (8, 8, 119) -> (1, 119, 8, 8)
 
         with torch.no_grad():
             log_act_probs, value = self.policy_value_net(current_state)

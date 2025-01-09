@@ -103,7 +103,7 @@ def collect_selfplay_data(env, mcts_player, game_iter):
 
     win_ratio = 1.0 * win_cnt[1] / self_play_sizes
     print("Win rate : ", round(win_ratio * 100, 3), "%")
-    wandb.log({"Win_Rate/self_play": round(win_ratio * 100, 3)})
+    wandb.log({"win_Rate/self_play": round(win_ratio * 100, 3)})
 
     return data_buffer
 
@@ -291,8 +291,6 @@ if __name__ == '__main__':
             loss, entropy, lr_multiplier, policy_value_net = policy_update(lr_mul=lr_multiplier,
                                                                            policy_value_net=policy_value_net,
                                                                            data_buffers=data_buffer_training_iters)
-            wandb.log({"loss": loss,
-                       "entropy": entropy})
             if i == 0:
                 policy_evaluate(env, curr_mcts_player, curr_mcts_player)
                 model_file, eval_model_file = create_models(n_playout, i)
@@ -303,8 +301,8 @@ if __name__ == '__main__':
                 existing_files = get_existing_files(n_playout=n_playout)
                 old_i = max(existing_files)
                 best_old_model, _ = create_models(n_playout, (old_i - 1))
-                policy_value_net_old = PolicyValueNet(state.shape[0], state.shape[1], best_old_model)
 
+                policy_value_net_old = PolicyValueNet(state.shape[0], state.shape[1], best_old_model)
                 old_mcts_player = MCTSPlayer(policy_value_net_old.policy_value_fn, c_puct, n_playout, is_selfplay=0)
                 curr_mcts_player = MCTSPlayer(policy_value_net.policy_value_fn, c_puct, n_playout, is_selfplay=0)
 
@@ -319,7 +317,7 @@ if __name__ == '__main__':
 
                 if win_ratio > 0.5:
                     old_mcts_player = curr_mcts_player
-                    model_file, _ = create_models(n_playout, i)
+                    model_file = f"Training/nmcts{n_playout}/train_{i + 1:03d}.pth"
                     policy_value_net.save_model(model_file)
                     print(" ---------- New best policy!!! ---------- ")
 
